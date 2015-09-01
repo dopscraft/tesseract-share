@@ -1,0 +1,165 @@
+loader.loadAPI("events")
+loader.loadAPI("alp")
+ 
+local myEvents = events.create()
+local myAlp = alp.create(myEvents)
+ 
+-- This will be loaded from file.
+local config = {
+  name = "north-island",
+  sendSide = "bottom",
+  receiveSide = "top",
+  colours = {
+    fg = colors.blue,
+    bg = colors.white,
+    hfg = colors.white,
+    hbg = colors.blue
+  }
+}
+if not term.isColor() then
+  config.colours.fg = colors.white
+  config.colours.bg = colors.black
+  config.colours.hfg = colors.black
+  config.colours.hbg = colors.white
+end
+ 
+local address = myAlp:getAddress()
+local status = "Waiting"
+ 
+-- List of other servers.
+-- Array of associative arrays,
+-- with keys 'status', 'name', 'address'.
+local otherServers = {}
+ 
+-- Makes us send items
+function startSend()
+  status = "Send"
+  redstone.setOutput(config.receiveSide, false)
+  redstone.setOutput(config.sendSide, true)
+end
+ 
+-- Makes us receive items
+function startReceive()
+  status = "Receive"
+  redstone.setOutput(config.sendSide, false)
+  redstone.setOutput(config.receiveSide, true)
+end
+ 
+-- Helper functions
+function setColor(fg, bg)
+  term.setTextColor(fg)
+  term.setBackgroundColor(bg)
+end
+ 
+function drawDisplay()
+  setColor(config.colours.fg, config.colours.bg)
+  term.clear()
+  term.setCursorPos(1, 1)
+  -- our terminal info
+  setColor(config.colours.hfg, config.colours.hbg)
+  term.clearLine()
+  term.write("This: " .. config.name .. " (" .. address .. ") - " .. status)
+  -- list of other terminals
+  local y = 3
+  local i = 1
+  for k,v in pairs(otherServers) do
+    if v.status == "Receive" then
+      setColor(config.colours.hfg, config.colours.hbg)
+    else
+      setColor(config.colours.fg, config.colours.bg)
+    end
+    term.setCursorPos(1, y)
+    term.write("[" .. i .. "] " .. v.name .. " (" .. v.address .. ") - " .. v.status)
+  end
+  -- commands
+  setColor(config.colours.fg, config.colours.bg)
+  local x, y = term.getSize()
+  --term.setCursorPos(1, y - 1)
+  --term.write("Press number to send everything to a place")
+  term.setCursorPos(1, y)
+  term.write("Press H to receive all items here")
+end
+ 
+function onKeyPress(keycode)
+  if keycode == 35 then
+    myAlp:send("ffff", "tesseract-share", {
+      cmd = "send"
+    })
+    startReceive()
+  end
+  drawDisplay()
+end
+ 
+function onTimer()
+  os.startTimer(10)
+  -- Prune old servers.
+  local removeServers = {}
+  local time = os.clock()
+  for k,v in pairs(otherServers) do
+    if time - v.lastTime > 20 then
+      table.insert(removeServers, k)
+    end
+  end
+  for k,v in pairs(removeServers) do
+    otherServers[v] = nil
+  end
+  -- Announce again.
+  announce("ffff")
+  -- Refresh just because.
+  drawDisplay()
+end
+ 
+function onAlpPacket(src, dst, protocol, data)
+  if src == address then
+    return
+  end
+  if type(data) ~= "table" then
+    return
+  end
+  if not data.cmd then
+    return
+  end
+  if data.cmd == "announce" and data.info
+    and type(data.info) == "table"
+    and data.info.name and data.info.status
+    then
+    data.info.address = src
+    data.info.lastTime = os.clock()
+    if not otherServers[src] then
+      announce(src)
+    end
+    otherServers[src] = data.info
+    drawDisplay()
+  elseif data.cmd == "send" then
+    startSend()
+    announce()
+    drawDisplay()
+  elseif data.cmd == "receive" then
+    startReceive()
+    announce()
+    drawDisplay()
+  end
+end
+ 
+function announce(dest)
+  myAlp:send(dest, "tesseract-share", {
+    cmd = "announce",
+    info = {
+      name = config.name,
+      status = status
+    }
+  })
+end
+ 
+function run()
+  myEvents:register("key", onKeyPress)
+  myEvents:register("timer", onTimer)
+  myAlp:listen("tesseract-share", onAlpPacket, true)
+  announce("ffff")
+  drawDisplay()
+  os.startTimer(10)
+  while true do
+    myEvents:pullEvent()
+  end
+end
+run()
