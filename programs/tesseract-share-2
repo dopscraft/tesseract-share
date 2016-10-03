@@ -1,0 +1,218 @@
+--------------------------------------------------
+-- Tesseract Remote Share Software
+-- Allows terminals with an ALP2 network
+-- connection to control a tesseract to share
+-- the contents.
+--------------------------------------------------
+-- APIs
+
+loader.loadAPI("alp2")
+loader.loadAPI("alp2tools")
+
+--------------------------------------------------
+-- Config
+
+-- This will be loaded from file.
+-- TODO: Set name and sides from command line arguments.
+-- TODO: Load colours from the registry.
+-- TODO: Using nil for side lets us act as a controller,
+-- we'd have to accept numbers to let us send to a particular place
+-- TODO: Let these be configured in groups.
+local config = {
+  name = "Test",
+  sendSide = "bottom",
+  receiveSide = "top",
+  colours = {
+    fg = colors.blue,
+    bg = colors.white,
+    hfg = colors.white,
+    hbg = colors.blue
+  }
+}
+if not term.isColor() then
+  config.colours.fg = colors.white
+  config.colours.bg = colors.black
+  config.colours.hfg = colors.black
+  config.colours.hbg = colors.white
+end
+
+--------------------------------------------------
+-- Global state
+
+local otherServers = {}
+
+local lastSendUpdate = 0
+
+local status = "Waiting"
+
+--------------------------------------------------
+-- Constants
+
+local PROTOCOL = "tesseract-share"
+
+--------------------------------------------------
+-- Funcs
+
+-- Makes us send items
+function startSend()
+  status = "Send"
+  redstone.setOutput(config.receiveSide, false)
+  redstone.setOutput(config.sendSide, true)
+end
+ 
+-- Makes us receive items
+function startReceive()
+  status = "Receive"
+  redstone.setOutput(config.sendSide, false)
+  redstone.setOutput(config.receiveSide, true)
+end
+
+-- globals: config, address, status
+function drawDisplay()
+  setColor(config.colours.fg, config.colours.bg)
+  term.clear()
+  term.setCursorPos(1, 1)
+  -- our terminal info
+  setColor(config.colours.hfg, config.colours.hbg)
+  term.clearLine()
+  term.write("This: " .. config.name .. " - " .. status)
+  -- list of other terminals
+  local y = 3
+  local i = 1
+  for k,v in pairs(otherServers) do
+    if v.status == "Receive" then
+      setColor(config.colours.hfg, config.colours.hbg)
+    else
+      setColor(config.colours.fg, config.colours.bg)
+    end
+    term.setCursorPos(1, y)
+    term.write("[" .. i .. "] " .. v.name .. " (" .. v.address .. ") - " .. v.status)
+    i = i + 1
+    y = y + 1
+  end
+  -- commands
+  setColor(config.colours.fg, config.colours.bg)
+  local x, y = term.getSize()
+  --term.setCursorPos(1, y - 1)
+  --term.write("Press number to send everything to a place")
+  term.setCursorPos(1, y)
+  term.write("Press H to receive all items here")
+end
+
+-- Sends our details to other servers
+-- globals: lastSendUpdate, config, status
+function sendUpdate(target)
+  if target == nil and os.clock() - lastSendUpdate < 30 then
+    return
+  end
+  if target == nil then
+    target = "%"
+  end
+  alp2.sendPacket(
+    alp2.getDevices(),
+    PROTOCOL,
+    target,
+    {
+      command = "update",
+      name = config.name,
+      status = status
+    }
+  )
+  lastSendUpdate = os.clock()
+end
+
+function requestUpdate()
+  alp2.sendPacket(
+    alp2.getDevices(),
+    PROTOCOL,
+    "%",
+    {
+      command = "request-update"
+    }
+  );
+end
+
+-- Handles any incoming packet
+-- globals: otherServers
+function handlePacket(packet)
+  if not packet.command then
+    return
+  end
+  if packet.command == "request-update" then
+    sendUpdate(packet.src)
+  end
+  if packet.command == "update" then
+    if packet.name and packet.status then
+      otherServers[packet.name] = {
+        name = packet.name,
+        address = packet.src,
+        status = packet.status,
+        lastUpdate = os.clock()
+      }
+    end
+  end
+  if packet.command == "send" then
+    startSend()
+  end
+end
+
+-- Removes servers that we haven't heard from
+-- globals: otherServers
+function removeOldServers()
+  local toRemove = {}
+  local now = os.clock()
+  for k,v in otherServers do
+    if now - v.lastUpdate > 45 do
+      table.insert(toRemove, k)
+    end
+  end
+  for k,v in toRemove do
+    otherServers[v] = nil
+  end
+end
+
+--------------------------------------------------
+-- Networking
+
+function networking()
+  alp2.openDevices(alp2.getDevices())
+  requestUpdate()
+  sendUpdate()
+  while true do
+    packet = alp2.waitForPacket(PROTOCOL, 30)
+    if packet then
+      handlePacket(packet)
+    end
+    sendUpdate()
+    removeOldServers()
+    drawDisplay()
+  end
+end
+
+--------------------------------------------------
+-- Gui
+
+function gui()
+  -- show gui
+  while true do
+    local event, character = os.pullEvent("char")
+    if character == "h" then
+      alp2.sendPacket(
+        alp2.getDevices(),
+        PROTOCOL,
+        "%",
+        {
+          command = "send"
+        }
+      );
+      startReceive()
+    end
+    drawDisplay()
+  end
+end
+
+--------------------------------------------------
+-- Start
+
+parallel.waitForAny(networking, gui)
+

@@ -1,3 +1,22 @@
+--[[
+Interface for sharing items between tesseracts.
+The computer must be arranged so that two of its
+sides are each hooked up to control a redstone
+signal:
+
+A "send" side causes items to be transfered from
+a connected inventory to the tesseract.
+
+A "receive" side causes items to be transferred
+from the tesseract to a connected inventory.
+
+The computer must also be connected via modem
+to other computers controlling other tesseracts.
+]]
+
+-- TODO: Use parallel.waitForAny in a loop.
+-- Or we can terminate when any coroutine terminates.
+
 loader.loadAPI("events")
 loader.loadAPI("alp")
  
@@ -5,8 +24,10 @@ local myEvents = events.create()
 local myAlp = alp.create(myEvents)
  
 -- This will be loaded from file.
+-- TODO: Set name and sides from command line arguments.
+-- TODO: Load colours from the registry.
 local config = {
-  name = "north-island",
+  name = "Test",
   sendSide = "bottom",
   receiveSide = "top",
   colours = {
@@ -70,6 +91,8 @@ function drawDisplay()
     end
     term.setCursorPos(1, y)
     term.write("[" .. i .. "] " .. v.name .. " (" .. v.address .. ") - " .. v.status)
+    i = i + 1
+    y = y + 1
   end
   -- commands
   setColor(config.colours.fg, config.colours.bg)
@@ -110,9 +133,6 @@ function onTimer()
 end
  
 function onAlpPacket(src, dst, protocol, data)
-  if src == address then
-    return
-  end
   if type(data) ~= "table" then
     return
   end
